@@ -1,0 +1,27 @@
+# rsync 移行リストファイル サンプル
+#
+# 書式:
+#   @user:password               ← ユーザ切り替え (@ で始まる行)
+#   <移行元パス> [移行先パス]    ← ディレクトリ指定
+#
+#   - @ 行以降のディレクトリはそのユーザ/パスワードで接続します
+#   - 移行先パスを省略すると、移行元と同じパスとして扱われます
+#   - スペースまたはタブ区切り
+#   - # から始まる行・空行はスキップされます
+
+# ---- ユーザ別パスワードを使う場合 ----
+@user01:password01
+/home/user01/work/dir1
+/home/user01/work/dir2
+
+@user02:password02
+/home/user02/work/dir1
+/home/user02/work/dir2
+
+# ---- 移行元と移行先でパスが異なる場合は2列で指定 ----
+@user03:password03
+/home/user03/work/old    /home/user03/work/new
+
+# ---- 鍵認証 (-S user@host) の場合は @ 行不要 ----
+# /data/projectA
+# /data/old/app    /data/new/app
