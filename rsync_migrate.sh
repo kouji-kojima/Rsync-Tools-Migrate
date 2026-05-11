@@ -337,7 +337,7 @@ do_rsync() {
     else
         rsync_cmd "${RSYNC_OPTS[@]}" "${SRC_HOST}:${src}" "$dst_path" < /dev/null
     fi | while IFS= read -r line; do
-        $QUIET_MODE || annotate_rsync_line "$line"
+        annotate_rsync_line "$line"
         echo "    $line" >> "$LOG_FILE"
     done
     local rc="${PIPESTATUS[0]}"
@@ -457,11 +457,13 @@ run_loop() {
 
     done < "$LIST_FILE"
 
-    echo ""
-    echo -e "${BOLD}=== 結果サマリー ===${RESET}"
-    echo -e "  成功:     ${GREEN}${success}${RESET}"
-    echo -e "  スキップ: ${YELLOW}${skipped}${RESET}"
-    echo -e "  失敗:     ${RED}${failed}${RESET}"
+    if ! $QUIET_MODE; then
+        echo ""
+        echo -e "${BOLD}=== 結果サマリー ===${RESET}"
+        echo -e "  成功:     ${GREEN}${success}${RESET}"
+        echo -e "  スキップ: ${YELLOW}${skipped}${RESET}"
+        echo -e "  失敗:     ${RED}${failed}${RESET}"
+    fi
     {
         echo ""
         echo "========================================"
