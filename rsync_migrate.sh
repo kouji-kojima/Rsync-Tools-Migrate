@@ -159,14 +159,14 @@ fi
 #  -a            アーカイブモード (権限/タイムスタンプ/オーナー/グループ/シンボリックリンクを保持)
 #  -H            ハードリンクを保持
 #  -A            ACL を保持
-#  -X            拡張属性を保持
+#  (-X は除外: OS が異なるため SELinux ラベル等の xattr は移行先で restorecon により再設定する)
 #  --delete           移行先にのみ存在するファイルを削除し、移行元と完全一致させる
 #  --itemize-changes  変更内容を1行ずつ記号で表示 (パーミッションのみの差異も検出)
 #  --checksum         タイムスタンプではなくチェックサムで差異を判断 (中身が本当に違うか確認、デフォルト有効)
 #                     大量ファイル・大容量の場合は -nc で無効化してタイムスタンプ+サイズ比較に切り替え可能
 # ------------------------------------------------------------------ #
 
-RSYNC_OPTS=(-aHAX --delete --itemize-changes)
+RSYNC_OPTS=(-aHA --delete --itemize-changes)
 $USE_CHECKSUM && RSYNC_OPTS+=(--checksum)
 $DRY_RUN && RSYNC_OPTS+=(--dry-run)
 
@@ -509,7 +509,7 @@ else
     echo ""
     echo -e "${GREEN}--- 本番実行 ---${RESET}"
     DRY_RUN=false
-    RSYNC_OPTS=(-aHAX --delete --itemize-changes)
+    RSYNC_OPTS=(-aHA --delete --itemize-changes)
     $USE_CHECKSUM && RSYNC_OPTS+=(--checksum)
     run_loop
 fi
