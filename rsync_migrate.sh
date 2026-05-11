@@ -166,7 +166,7 @@ fi
 #                     大量ファイル・大容量の場合は -nc で無効化してタイムスタンプ+サイズ比較に切り替え可能
 # ------------------------------------------------------------------ #
 
-RSYNC_OPTS=(-aHAX --delete -v --itemize-changes)
+RSYNC_OPTS=(-aHAX --delete --itemize-changes)
 $USE_CHECKSUM && RSYNC_OPTS+=(--checksum)
 $DRY_RUN && RSYNC_OPTS+=(--dry-run)
 
@@ -509,7 +509,7 @@ else
     echo ""
     echo -e "${GREEN}--- 本番実行 ---${RESET}"
     DRY_RUN=false
-    RSYNC_OPTS=(-aHAX --delete -v --itemize-changes)
+    RSYNC_OPTS=(-aHAX --delete --itemize-changes)
     $USE_CHECKSUM && RSYNC_OPTS+=(--checksum)
     run_loop
 fi
