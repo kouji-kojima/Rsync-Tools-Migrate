@@ -68,6 +68,7 @@ RESET='\033[0m'
 DRY_RUN=true
 ASK_PASSWORD=false
 USE_CHECKSUM=true
+QUIET_MODE=false
 LIST_FILE=""
 SRC_HOST=""
 SRC_BASE_HOST=""   # user@ を除いたホスト名
@@ -235,7 +236,7 @@ src_exists() {
 make_dst_dir() {
     local path="$1"
     if $DRY_RUN; then
-        echo -e "  [ドライラン] mkdir -p ${path}"; return 0
+        $QUIET_MODE || echo -e "  [ドライラン] mkdir -p ${path}"; return 0
     fi
     mkdir -p "$path"
 }
@@ -336,7 +337,7 @@ do_rsync() {
     else
         rsync_cmd "${RSYNC_OPTS[@]}" "${SRC_HOST}:${src}" "$dst_path" < /dev/null
     fi | while IFS= read -r line; do
-        annotate_rsync_line "$line"
+        $QUIET_MODE || annotate_rsync_line "$line"
         echo "    $line" >> "$LOG_FILE"
     done
     local rc="${PIPESTATUS[0]}"
@@ -418,9 +419,11 @@ run_loop() {
         local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
         local mode; $DRY_RUN && mode="DRY-RUN" || mode="EXECUTE"
 
-        echo -e "${BOLD}------------------------------------------------------------${RESET}"
-        echo -e "${BOLD}[${total}] 移行元:${RESET} ${SRC_HOST:-ローカル}:${src}"
-        echo -e "${BOLD}    移行先:${RESET} ローカル:${dst}"
+        if ! $QUIET_MODE; then
+            echo -e "${BOLD}------------------------------------------------------------${RESET}"
+            echo -e "${BOLD}[${total}] 移行元:${RESET} ${SRC_HOST:-ローカル}:${src}"
+            echo -e "${BOLD}    移行先:${RESET} ローカル:${dst}"
+        fi
         log ""
         log "------------------------------------------------------------"
         log "[${total}] ${ts} [${mode}]"
@@ -428,26 +431,26 @@ run_loop() {
         log "  移行先: ローカル:${dst}"
 
         if ! src_exists "$src"; then
-            echo -e "${RED}  エラー: 移行元が存在しません${RESET}" >&2
+            echo -e "${RED}  エラー [${total}] 移行元が存在しません: ${SRC_HOST:-ローカル}:${src}${RESET}" >&2
             log "  結果: エラー (移行元が存在しません)"
             failed=$((failed + 1)); continue
         fi
 
         if [[ ! -d "$dst" ]]; then
-            echo -e "  移行先ディレクトリを作成: ${dst}"
+            $QUIET_MODE || echo -e "  移行先ディレクトリを作成: ${dst}"
             make_dst_dir "$dst"
         fi
 
-        echo -e "  ${GREEN}rsync 実行中...${RESET}"
+        $QUIET_MODE || echo -e "  ${GREEN}rsync 実行中...${RESET}"
         log "  rsync 出力:"
         local rc=0
         do_rsync "$src" "$dst" || rc=$?
         if [[ $rc -eq 0 ]]; then
-            echo -e "  ${GREEN}完了${RESET}"
+            $QUIET_MODE || echo -e "  ${GREEN}完了${RESET}"
             log "  結果: 完了 ($(date '+%Y-%m-%d %H:%M:%S'))"
             success=$((success + 1))
         else
-            echo -e "  ${RED}失敗 (rsync 終了コード: ${rc})${RESET}" >&2
+            echo -e "  ${RED}失敗 [${total}] rsync 終了コード: ${rc} (${SRC_HOST:-ローカル}:${src})${RESET}" >&2
             log "  結果: 失敗 (code=${rc}, $(date '+%Y-%m-%d %H:%M:%S'))"
             failed=$((failed + 1))
         fi
@@ -481,11 +484,13 @@ if $DRY_RUN; then
     # デフォルト: ドライランのみ
     run_loop
 else
-    # -e 指定時: まずドライランで差異を表示し、確認後に本番実行
-    echo -e "${YELLOW}--- ドライラン (差異確認) ---${RESET}"
+    # -e 指定時: まずドライランで差異を確認し (サマリーのみ表示)、確認後に本番実行
+    echo -e "${YELLOW}--- 事前チェック (ドライラン) ---${RESET}"
     DRY_RUN=true
+    QUIET_MODE=true
     RSYNC_OPTS+=( --dry-run)
     run_loop || true
+    QUIET_MODE=false
 
     echo ""
     while true; do
