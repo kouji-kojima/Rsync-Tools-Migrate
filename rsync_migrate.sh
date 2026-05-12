@@ -8,6 +8,7 @@
 #   -S, --src-host HOST         移行元サーバ (省略時: ローカル)
 #   -W, --ask-password          SSH接続にパスワード認証を使用する (要: sshpass)
 #   -e, --execute               実際に同期を実行する (省略時: ドライラン)
+#   -y, --yes                   事前チェックをスキップして即座に同期を実行する (-e を含む)
 #   -nc, --no-checksum          チェックサム比較を無効化 (タイムスタンプ+サイズで比較、高速)
 #   -L, --log DIR               ログ出力先ディレクトリ (省略時: ./exe_results/rsync_migrate_YYYYMMDD_HHMMSS/)
 #   -h, --help                  このヘルプを表示
@@ -46,10 +47,13 @@
 #   # ② 本番実行 (ドライラン差異確認 → y/n で一括実行)
 #   ./rsync_migrate.sh -S server1 -e migrate_list.txt
 #
-#   # ③ チェックサム無効 (大量ファイル・大容量で遅い場合)
+#   # ③ 事前チェックをスキップして即座に同期 (確認プロンプトあり)
+#   ./rsync_migrate.sh -S server1 -y migrate_list.txt
+#
+#   # ④ チェックサム無効 (大量ファイル・大容量で遅い場合)
 #   ./rsync_migrate.sh -S server1 -nc migrate_list.txt
 #
-#   # ④ -W でパスワード認証 (従来形式: ユーザを -S に含める)
+#   # ⑤ -W でパスワード認証 (従来形式: ユーザを -S に含める)
 #   ./rsync_migrate.sh -S user@server1 -W -e migrate_list.txt
 
 set -euo pipefail
@@ -66,6 +70,7 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 DRY_RUN=true
+SKIP_CHECK=false
 ASK_PASSWORD=false
 USE_CHECKSUM=true
 QUIET_MODE=false
@@ -97,6 +102,7 @@ while [[ $# -gt 0 ]]; do
             SRC_HOST="$2"; shift 2 ;;
         -W|--ask-password) ASK_PASSWORD=true;    shift ;;
         -e|--execute)     DRY_RUN=false;       shift ;;
+        -y|--yes)         DRY_RUN=false; SKIP_CHECK=true; shift ;;
         -nc|--no-checksum) USE_CHECKSUM=false; shift ;;
         -L|--log)
             [[ -z "${2:-}" ]] && { echo -e "${RED}エラー: --log に値が必要です${RESET}" >&2; exit 1; }
@@ -358,6 +364,8 @@ echo -e "移行元サーバ   : ${SRC_BASE_HOST:-ローカル}"
 echo -e "移行先         : ローカル (このサーバ)"
 if $DRY_RUN; then
     echo -e "${YELLOW}モード         : ドライラン (実際のファイル操作は行いません)${RESET}"
+elif $SKIP_CHECK; then
+    echo -e "モード         : ${GREEN}本番実行 (事前チェックなし → y/n → 同期)${RESET}"
 else
     echo -e "モード         : ${GREEN}本番実行 (ドライラン確認 → y/n → 同期)${RESET}"
 fi
@@ -483,11 +491,27 @@ run_loop() {
 # ------------------------------------------------------------------ #
 
 if $DRY_RUN; then
-    # デフォルト: ドライランのみ (サマリーのみ表示)
+    # デフォルト: ドライランのみ (差分行のみ表示)
     QUIET_MODE=true
     run_loop
+elif $SKIP_CHECK; then
+    # -y 指定時: 事前チェックをスキップして確認後に本番実行
+    echo ""
+    while true; do
+        echo -en "${CYAN}事前チェックをスキップします。同期を実行しますか？ [y/n]: ${RESET}"
+        read -r answer </dev/tty
+        case "${answer,,}" in
+            y|yes) break ;;
+            n|no)  echo -e "${YELLOW}中断しました${RESET}"; exit 0 ;;
+            *)     echo -e "  ${RED}y または n を入力してください${RESET}" ;;
+        esac
+    done
+
+    echo ""
+    echo -e "${GREEN}--- 本番実行 ---${RESET}"
+    run_loop
 else
-    # -e 指定時: まずドライランで差異を確認し (サマリーのみ表示)、確認後に本番実行
+    # -e 指定時: まずドライランで差異を確認し (差分行のみ表示)、確認後に本番実行
     echo -e "${YELLOW}--- 事前チェック (ドライラン) ---${RESET}"
     DRY_RUN=true
     QUIET_MODE=true
