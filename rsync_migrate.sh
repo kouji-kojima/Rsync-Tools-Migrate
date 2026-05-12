@@ -280,6 +280,20 @@ switch_to_user() {
     )
 }
 
+# -y モード用: ファイルの @user:password 行をスキャンして SSH ControlMaster を事前確立する
+preconnect_hosts() {
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]]           && continue
+        if [[ "$line" =~ ^@([^:[:space:]]+):(.+)$ ]]; then
+            switch_to_user "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+            ssh_cmd "$SRC_HOST" true < /dev/null 2>/dev/null || true
+        fi
+    done < "$LIST_FILE"
+    # SRC_HOST / SSH_OPTS を先頭の @user に合わせたまま run_loop に渡す
+}
+
 # --itemize-changes の出力1行に日本語の説明を付与する
 #   フォーマット: YXcstpog... filename
 #   Y: > 転送あり  . メタデータのみ  * メッセージ(削除など)
@@ -496,6 +510,8 @@ if $DRY_RUN; then
     run_loop
 elif $SKIP_CHECK; then
     # -y 指定時: 事前チェックをスキップして確認後に本番実行
+    # ファイル内 @user:password の SSH ControlMaster を事前確立 (パスワード省略のため)
+    [[ -n "$SRC_HOST" ]] && preconnect_hosts
     echo ""
     while true; do
         echo -en "${CYAN}事前チェックをスキップします。同期を実行しますか？ [y/n]: ${RESET}"
