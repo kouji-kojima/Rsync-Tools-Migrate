@@ -9,7 +9,6 @@
 #   -W, --ask-password          SSH接続にパスワード認証を使用する (要: sshpass)
 #   -O, --ssh-opt OPTION        SSH オプションを追加する (複数指定可)
 #   -e, --execute               実際に同期を実行する (省略時: ドライラン)
-#   -y, --yes                   事前チェックをスキップして即座に同期を実行する (-e を含む)
 #   -nc, --no-checksum          チェックサム比較を無効化 (タイムスタンプ+サイズで比較、高速)
 #   -L, --log DIR               ログ出力先ディレクトリ (省略時: ./exe_results/rsync_migrate_YYYYMMDD_HHMMSS/)
 #   -h, --help                  このヘルプを表示
@@ -48,16 +47,13 @@
 #   # ② 本番実行 (ドライラン差異確認 → y/n で一括実行)
 #   ./rsync_migrate.sh -S server1 -e migrate_list.txt
 #
-#   # ③ 事前チェックをスキップして即座に同期 (確認プロンプトあり)
-#   ./rsync_migrate.sh -S server1 -y migrate_list.txt
-#
-#   # ④ チェックサム無効 (大量ファイル・大容量で遅い場合)
+#   # ③ チェックサム無効 (大量ファイル・大容量で遅い場合)
 #   ./rsync_migrate.sh -S server1 -nc migrate_list.txt
 #
-#   # ⑤ -W でパスワード認証 (従来形式: ユーザを -S に含める)
+#   # ④ -W でパスワード認証 (従来形式: ユーザを -S に含める)
 #   ./rsync_migrate.sh -S user@server1 -W -e migrate_list.txt
 #
-#   # ⑥ OpenSSH パッチ後など ssh-rsa が無効化されている場合
+#   # ⑤ OpenSSH パッチ後など ssh-rsa が無効化されている場合
 #   ./rsync_migrate.sh -S server1 -O "HostKeyAlgorithms=+ssh-rsa" -e migrate_list.txt
 
 set -euo pipefail
@@ -74,10 +70,8 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 DRY_RUN=true
-SKIP_CHECK=false
 ASK_PASSWORD=false
 USE_CHECKSUM=true
-QUIET_MODE=false
 LIST_FILE=""
 SRC_HOST=""
 SRC_BASE_HOST=""   # user@ を除いたホスト名
@@ -110,7 +104,6 @@ while [[ $# -gt 0 ]]; do
             [[ -z "${2:-}" ]] && { echo -e "${RED}エラー: --ssh-opt に値が必要です${RESET}" >&2; exit 1; }
             EXTRA_SSH_OPTS+=(-o "$2"); shift 2 ;;
         -e|--execute)     DRY_RUN=false;       shift ;;
-        -y|--yes)         DRY_RUN=false; SKIP_CHECK=true; shift ;;
         -nc|--no-checksum) USE_CHECKSUM=false; shift ;;
         -L|--log)
             [[ -z "${2:-}" ]] && { echo -e "${RED}エラー: --log に値が必要です${RESET}" >&2; exit 1; }
@@ -173,14 +166,14 @@ fi
 #  -a            アーカイブモード (権限/タイムスタンプ/オーナー/グループ/シンボリックリンクを保持)
 #  -H            ハードリンクを保持
 #  -A            ACL を保持
-#  (-X は除外: OS が異なるため SELinux ラベル等の xattr は移行先で restorecon により再設定する)
+#  -X            拡張属性を保持
 #  --delete           移行先にのみ存在するファイルを削除し、移行元と完全一致させる
 #  --itemize-changes  変更内容を1行ずつ記号で表示 (パーミッションのみの差異も検出)
 #  --checksum         タイムスタンプではなくチェックサムで差異を判断 (中身が本当に違うか確認、デフォルト有効)
 #                     大量ファイル・大容量の場合は -nc で無効化してタイムスタンプ+サイズ比較に切り替え可能
 # ------------------------------------------------------------------ #
 
-RSYNC_OPTS=(-aHA --delete --itemize-changes)
+RSYNC_OPTS=(-aHAX --delete -v --itemize-changes)
 $USE_CHECKSUM && RSYNC_OPTS+=(--checksum)
 $DRY_RUN && RSYNC_OPTS+=(--dry-run)
 
@@ -251,7 +244,7 @@ src_exists() {
 make_dst_dir() {
     local path="$1"
     if $DRY_RUN; then
-        $QUIET_MODE || echo -e "  [ドライラン] mkdir -p ${path}"; return 0
+        echo -e "  [ドライラン] mkdir -p ${path}"; return 0
     fi
     mkdir -p "$path"
 }
@@ -288,20 +281,6 @@ switch_to_user() {
         -o ControlPath="$CTRL_SOCKET"
         -o ControlPersist=60
     )
-}
-
-# -y モード用: ファイルの @user:password 行をスキャンして SSH ControlMaster を事前確立する
-preconnect_hosts() {
-    local line
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// }" ]]           && continue
-        if [[ "$line" =~ ^@([^:[:space:]]+):(.+)$ ]]; then
-            switch_to_user "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
-            ssh_cmd "$SRC_HOST" true < /dev/null 2>/dev/null || true
-        fi
-    done < "$LIST_FILE"
-    # SRC_HOST / SSH_OPTS を先頭の @user に合わせたまま run_loop に渡す
 }
 
 # --itemize-changes の出力1行に日本語の説明を付与する
@@ -388,8 +367,6 @@ echo -e "移行元サーバ   : ${SRC_BASE_HOST:-ローカル}"
 echo -e "移行先         : ローカル (このサーバ)"
 if $DRY_RUN; then
     echo -e "${YELLOW}モード         : ドライラン (実際のファイル操作は行いません)${RESET}"
-elif $SKIP_CHECK; then
-    echo -e "モード         : ${GREEN}本番実行 (事前チェックなし → y/n → 同期)${RESET}"
 else
     echo -e "モード         : ${GREEN}本番実行 (ドライラン確認 → y/n → 同期)${RESET}"
 fi
@@ -452,11 +429,9 @@ run_loop() {
         local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
         local mode; $DRY_RUN && mode="DRY-RUN" || mode="EXECUTE"
 
-        if ! $QUIET_MODE; then
-            echo -e "${BOLD}------------------------------------------------------------${RESET}"
-            echo -e "${BOLD}[${total}] 移行元:${RESET} ${SRC_HOST:-ローカル}:${src}"
-            echo -e "${BOLD}    移行先:${RESET} ローカル:${dst}"
-        fi
+        echo -e "${BOLD}------------------------------------------------------------${RESET}"
+        echo -e "${BOLD}[${total}] 移行元:${RESET} ${SRC_HOST:-ローカル}:${src}"
+        echo -e "${BOLD}    移行先:${RESET} ローカル:${dst}"
         log ""
         log "------------------------------------------------------------"
         log "[${total}] ${ts} [${mode}]"
@@ -464,39 +439,37 @@ run_loop() {
         log "  移行先: ローカル:${dst}"
 
         if ! src_exists "$src"; then
-            echo -e "${RED}  エラー [${total}] 移行元が存在しません: ${SRC_HOST:-ローカル}:${src}${RESET}" >&2
+            echo -e "${RED}  エラー: 移行元が存在しません${RESET}" >&2
             log "  結果: エラー (移行元が存在しません)"
             failed=$((failed + 1)); continue
         fi
 
         if [[ ! -d "$dst" ]]; then
-            $QUIET_MODE || echo -e "  移行先ディレクトリを作成: ${dst}"
+            echo -e "  移行先ディレクトリを作成: ${dst}"
             make_dst_dir "$dst"
         fi
 
-        $QUIET_MODE || echo -e "  ${GREEN}rsync 実行中...${RESET}"
+        echo -e "  ${GREEN}rsync 実行中...${RESET}"
         log "  rsync 出力:"
         local rc=0
         do_rsync "$src" "$dst" || rc=$?
         if [[ $rc -eq 0 ]]; then
-            $QUIET_MODE || echo -e "  ${GREEN}完了${RESET}"
+            echo -e "  ${GREEN}完了${RESET}"
             log "  結果: 完了 ($(date '+%Y-%m-%d %H:%M:%S'))"
             success=$((success + 1))
         else
-            echo -e "  ${RED}失敗 [${total}] rsync 終了コード: ${rc} (${SRC_HOST:-ローカル}:${src})${RESET}" >&2
+            echo -e "  ${RED}失敗 (rsync 終了コード: ${rc})${RESET}" >&2
             log "  結果: 失敗 (code=${rc}, $(date '+%Y-%m-%d %H:%M:%S'))"
             failed=$((failed + 1))
         fi
 
     done < "$LIST_FILE"
 
-    if ! $QUIET_MODE; then
-        echo ""
-        echo -e "${BOLD}=== 結果サマリー ===${RESET}"
-        echo -e "  成功:     ${GREEN}${success}${RESET}"
-        echo -e "  スキップ: ${YELLOW}${skipped}${RESET}"
-        echo -e "  失敗:     ${RED}${failed}${RESET}"
-    fi
+    echo ""
+    echo -e "${BOLD}=== 結果サマリー ===${RESET}"
+    echo -e "  成功:     ${GREEN}${success}${RESET}"
+    echo -e "  スキップ: ${YELLOW}${skipped}${RESET}"
+    echo -e "  失敗:     ${RED}${failed}${RESET}"
     {
         echo ""
         echo "========================================"
@@ -516,35 +489,14 @@ run_loop() {
 # ------------------------------------------------------------------ #
 
 if $DRY_RUN; then
-    # デフォルト: ドライランのみ (差分行のみ表示)
-    QUIET_MODE=true
-    run_loop
-elif $SKIP_CHECK; then
-    # -y 指定時: 事前チェックをスキップして確認後に本番実行
-    # ファイル内 @user:password の SSH ControlMaster を事前確立 (パスワード省略のため)
-    [[ -n "$SRC_HOST" ]] && preconnect_hosts
-    echo ""
-    while true; do
-        echo -en "${CYAN}事前チェックをスキップします。同期を実行しますか？ [y/n]: ${RESET}"
-        read -r answer </dev/tty
-        case "${answer,,}" in
-            y|yes) break ;;
-            n|no)  echo -e "${YELLOW}中断しました${RESET}"; exit 0 ;;
-            *)     echo -e "  ${RED}y または n を入力してください${RESET}" ;;
-        esac
-    done
-
-    echo ""
-    echo -e "${GREEN}--- 本番実行 ---${RESET}"
+    # デフォルト: ドライランのみ
     run_loop
 else
-    # -e 指定時: まずドライランで差異を確認し (差分行のみ表示)、確認後に本番実行
-    echo -e "${YELLOW}--- 事前チェック (ドライラン) ---${RESET}"
+    # -e 指定時: まずドライランで差異を表示し、確認後に本番実行
+    echo -e "${YELLOW}--- ドライラン (差異確認) ---${RESET}"
     DRY_RUN=true
-    QUIET_MODE=true
     RSYNC_OPTS+=( --dry-run)
     run_loop || true
-    QUIET_MODE=false
 
     echo ""
     while true; do
@@ -560,7 +512,7 @@ else
     echo ""
     echo -e "${GREEN}--- 本番実行 ---${RESET}"
     DRY_RUN=false
-    RSYNC_OPTS=(-aHA --delete --itemize-changes)
+    RSYNC_OPTS=(-aHAX --delete -v --itemize-changes)
     $USE_CHECKSUM && RSYNC_OPTS+=(--checksum)
     run_loop
 fi
