@@ -7,6 +7,7 @@
 # オプション:
 #   -S, --src-host HOST         移行元サーバ (省略時: ローカル)
 #   -W, --ask-password          SSH接続にパスワード認証を使用する (要: sshpass)
+#   -O, --ssh-opt OPTION        SSH オプションを追加する (複数指定可)
 #   -e, --execute               実際に同期を実行する (省略時: ドライラン)
 #   -y, --yes                   事前チェックをスキップして即座に同期を実行する (-e を含む)
 #   -nc, --no-checksum          チェックサム比較を無効化 (タイムスタンプ+サイズで比較、高速)
@@ -55,6 +56,9 @@
 #
 #   # ⑤ -W でパスワード認証 (従来形式: ユーザを -S に含める)
 #   ./rsync_migrate.sh -S user@server1 -W -e migrate_list.txt
+#
+#   # ⑥ OpenSSH パッチ後など ssh-rsa が無効化されている場合
+#   ./rsync_migrate.sh -S server1 -O "HostKeyAlgorithms=+ssh-rsa" -e migrate_list.txt
 
 set -euo pipefail
 
@@ -80,6 +84,7 @@ SRC_BASE_HOST=""   # user@ を除いたホスト名
 SSH_PASS=""
 LOG_FILE=""
 LOG_DIR=""
+EXTRA_SSH_OPTS=()  # -O で追加された SSH オプション
 
 # ControlMaster ソケット管理 (user@host -> socket path)
 declare -A HOST_SOCKETS=()
@@ -101,6 +106,9 @@ while [[ $# -gt 0 ]]; do
             [[ -z "${2:-}" ]] && { echo -e "${RED}エラー: --src-host に値が必要です${RESET}" >&2; exit 1; }
             SRC_HOST="$2"; shift 2 ;;
         -W|--ask-password) ASK_PASSWORD=true;    shift ;;
+        -O|--ssh-opt)
+            [[ -z "${2:-}" ]] && { echo -e "${RED}エラー: --ssh-opt に値が必要です${RESET}" >&2; exit 1; }
+            EXTRA_SSH_OPTS+=(-o "$2"); shift 2 ;;
         -e|--execute)     DRY_RUN=false;       shift ;;
         -y|--yes)         DRY_RUN=false; SKIP_CHECK=true; shift ;;
         -nc|--no-checksum) USE_CHECKSUM=false; shift ;;
@@ -201,6 +209,7 @@ if [[ -n "$SRC_HOST" ]]; then
     CTRL_SOCKET="$(mktemp /tmp/.rsync_migrate_XXXXXX)"; rm -f "$CTRL_SOCKET"
     HOST_SOCKETS["$SRC_HOST"]="$CTRL_SOCKET"
     SSH_OPTS=(
+        "${EXTRA_SSH_OPTS[@]}"
         -o ControlMaster=auto
         -o ControlPath="$CTRL_SOCKET"
         -o ControlPersist=60
@@ -274,6 +283,7 @@ switch_to_user() {
     fi
     CTRL_SOCKET="${HOST_SOCKETS[$new_host]}"
     SSH_OPTS=(
+        "${EXTRA_SSH_OPTS[@]}"
         -o ControlMaster=auto
         -o ControlPath="$CTRL_SOCKET"
         -o ControlPersist=60
@@ -386,6 +396,7 @@ fi
 $USE_CHECKSUM \
     && echo -e "チェックサム   : 有効 (遅い場合は -nc で無効化)" \
     || echo -e "チェックサム   : ${YELLOW}無効 (タイムスタンプ+サイズ比較)${RESET}"
+[[ ${#EXTRA_SSH_OPTS[@]} -gt 0 ]] && echo -e "SSH追加オプション: ${EXTRA_SSH_OPTS[*]}"
 echo -e "ログ出力先     : ${LOG_FILE}"
 echo ""
 
