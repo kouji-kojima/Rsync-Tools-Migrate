@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rsync_migrate.sh - サーバ間ディレクトリ移行ツール
+# rsync_migrate.sh - サーバ間ディレクトリ移行ツール (標準版)
 #
 # 使い方:
 #   ./rsync_migrate.sh [オプション] <移行リストファイル>
