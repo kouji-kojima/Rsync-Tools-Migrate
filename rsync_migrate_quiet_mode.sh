@@ -314,6 +314,17 @@ preconnect_hosts() {
 #   p: p パーミッション差異
 #   o: o オーナー差異
 #   g: g グループ差異
+# rsync 終了コードに応じた接続エラーのヒントを返す
+rsync_error_hint() {
+    case "$1" in
+        255) echo "SSH接続エラー。ファイアウォールがSSHポートをブロックしているか、移行元サーバに到達できません" ;;
+        10)  echo "ネットワークI/Oエラー。接続が拒否されたかネットワークに到達できません" ;;
+        30)  echo "転送タイムアウト。ファイアウォールが通信を遮断している可能性があります" ;;
+        35)  echo "接続タイムアウト。rsyncデーモンへの接続がタイムアウトしました" ;;
+        *)   echo "" ;;
+    esac
+}
+
 annotate_rsync_line() {
     local line="$1"
 
@@ -483,7 +494,9 @@ run_loop() {
             log "  結果: 完了 ($(date '+%Y-%m-%d %H:%M:%S'))"
             success=$((success + 1))
         else
+            local hint; hint="$(rsync_error_hint "$rc")"
             echo -e "  ${RED}失敗 [${total}] rsync 終了コード: ${rc} (${SRC_HOST:-ローカル}:${src})${RESET}" >&2
+            [[ -n "$hint" ]] && echo -e "  ${YELLOW}ヒント: ${hint}${RESET}" >&2
             log "  結果: 失敗 (code=${rc}, $(date '+%Y-%m-%d %H:%M:%S'))"
             failed=$((failed + 1))
         fi
