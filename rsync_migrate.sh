@@ -79,6 +79,7 @@ SSH_PASS=""
 LOG_FILE=""
 LOG_DIR=""
 EXTRA_SSH_OPTS=()  # -O で追加された SSH オプション
+RSYNC_LAST_STDERR=""  # do_rsync が設定する (エラーヒント判定用)
 
 # ControlMaster ソケット管理 (user@host -> socket path)
 declare -A HOST_SOCKETS=()
@@ -293,10 +294,16 @@ switch_to_user() {
 #   p: p パーミッション差異
 #   o: o オーナー差異
 #   g: g グループ差異
-# rsync 終了コードに応じた接続エラーのヒントを返す
+# rsync 終了コードと stderr に応じた接続エラーのヒントを返す
 rsync_error_hint() {
-    case "$1" in
-        255) echo "SSH接続エラー。ファイアウォールがSSHポートをブロックしているか、移行元サーバに到達できません" ;;
+    local rc="$1" stderr="$2"
+    case "$rc" in
+        255)
+            if echo "$stderr" | grep -qiE 'no matching (host key|key exchange)|Unable to negotiate|HostKeyAlgorithms|PubkeyAccepted|ssh-rsa'; then
+                echo "暗号アルゴリズム不一致。-O \"HostKeyAlgorithms=+ssh-rsa\" を追加してください (例: -S server1 -O \"HostKeyAlgorithms=+ssh-rsa\")"
+            else
+                echo "SSH接続エラー。ファイアウォールがSSHポートをブロックしているか、移行元サーバに到達できません"
+            fi ;;
         10)  echo "ネットワークI/Oエラー。接続が拒否されたかネットワークに到達できません" ;;
         30)  echo "転送タイムアウト。ファイアウォールが通信を遮断している可能性があります" ;;
         35)  echo "接続タイムアウト。rsyncデーモンへの接続がタイムアウトしました" ;;
@@ -351,16 +358,22 @@ annotate_rsync_line() {
 do_rsync() {
     local src_path="$1" dst_path="$2"
     local src="${src_path%/}/"  # 末尾 / でディレクトリの中身を同期
+    local stderr_tmp
+    stderr_tmp="$(mktemp)"
 
-    if [[ -z "$SRC_HOST" ]]; then
-        rsync_cmd "${RSYNC_OPTS[@]}" "$src" "$dst_path" < /dev/null
-    else
-        rsync_cmd "${RSYNC_OPTS[@]}" "${SRC_HOST}:${src}" "$dst_path" < /dev/null
-    fi | while IFS= read -r line; do
+    {
+        if [[ -z "$SRC_HOST" ]]; then
+            rsync_cmd "${RSYNC_OPTS[@]}" "$src" "$dst_path" < /dev/null
+        else
+            rsync_cmd "${RSYNC_OPTS[@]}" "${SRC_HOST}:${src}" "$dst_path" < /dev/null
+        fi
+    } 2>"$stderr_tmp" | while IFS= read -r line; do
         annotate_rsync_line "$line"
         echo "    $line" >> "$LOG_FILE"
     done
     local rc="${PIPESTATUS[0]}"
+    RSYNC_LAST_STDERR="$(cat "$stderr_tmp")"
+    rm -f "$stderr_tmp"
     return "$rc"
 }
 
@@ -469,8 +482,9 @@ run_loop() {
             log "  結果: 完了 ($(date '+%Y-%m-%d %H:%M:%S'))"
             success=$((success + 1))
         else
-            local hint; hint="$(rsync_error_hint "$rc")"
+            local hint; hint="$(rsync_error_hint "$rc" "$RSYNC_LAST_STDERR")"
             echo -e "  ${RED}失敗 (rsync 終了コード: ${rc})${RESET}" >&2
+            [[ -n "$RSYNC_LAST_STDERR" ]] && echo "$RSYNC_LAST_STDERR" | while IFS= read -r eline; do echo "  $eline" >&2; log "    [stderr] $eline"; done
             [[ -n "$hint" ]] && echo -e "  ${YELLOW}ヒント: ${hint}${RESET}" >&2
             log "  結果: 失敗 (code=${rc}, $(date '+%Y-%m-%d %H:%M:%S'))"
             failed=$((failed + 1))
