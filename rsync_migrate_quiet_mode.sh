@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# rsync_migrate.sh - サーバ間ディレクトリ移行ツール
+# rsync_migrate_quiet_mode.sh - サーバ間ディレクトリ移行ツール (quiet_mode版)
 #
 # 使い方:
-#   ./rsync_migrate.sh [オプション] <移行リストファイル>
+#   ./rsync_migrate_quiet_mode.sh [オプション] <移行リストファイル>
 #
 # オプション:
 #   -S, --src-host HOST         移行元サーバ (省略時: ローカル)
@@ -43,22 +43,22 @@
 #
 # 実行例:
 #   # ① ドライランで差異を確認 (デフォルト。何も変更されない)
-#   ./rsync_migrate.sh -S server1 migrate_list.txt
+#   ./rsync_migrate_quiet_mode.sh -S server1 migrate_list.txt
 #
 #   # ② 本番実行 (ドライラン差異確認 → y/n で一括実行)
-#   ./rsync_migrate.sh -S server1 -e migrate_list.txt
+#   ./rsync_migrate_quiet_mode.sh -S server1 -e migrate_list.txt
 #
 #   # ③ 事前チェックをスキップして即座に同期 (確認プロンプトあり)
-#   ./rsync_migrate.sh -S server1 -y migrate_list.txt
+#   ./rsync_migrate_quiet_mode.sh -S server1 -y migrate_list.txt
 #
 #   # ④ チェックサム無効 (大量ファイル・大容量で遅い場合)
-#   ./rsync_migrate.sh -S server1 -nc migrate_list.txt
+#   ./rsync_migrate_quiet_mode.sh -S server1 -nc migrate_list.txt
 #
 #   # ⑤ -W でパスワード認証 (従来形式: ユーザを -S に含める)
-#   ./rsync_migrate.sh -S user@server1 -W -e migrate_list.txt
+#   ./rsync_migrate_quiet_mode.sh -S user@server1 -W -e migrate_list.txt
 #
 #   # ⑥ OpenSSH パッチ後など ssh-rsa が無効化されている場合
-#   ./rsync_migrate.sh -S server1 -O "HostKeyAlgorithms=+ssh-rsa" -e migrate_list.txt
+#   ./rsync_migrate_quiet_mode.sh -S server1 -O "HostKeyAlgorithms=+ssh-rsa" -e migrate_list.txt
 
 set -euo pipefail
 
