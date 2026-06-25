@@ -79,6 +79,8 @@ SSH_PASS=""
 LOG_FILE=""
 LOG_DIR=""
 EXTRA_SSH_OPTS=()  # -O で追加された SSH オプション
+RSYNC_LAST_STDERR=""  # do_rsync が設定する (エラーヒント判定用)
+SRC_CHECK_STDERR=""   # src_exists が設定する SSH stderr (接続エラー判定用)
 
 # ControlMaster ソケット管理 (user@host -> socket path)
 declare -A HOST_SOCKETS=()
@@ -111,7 +113,7 @@ while [[ $# -gt 0 ]]; do
         -h|--help)        usage ;;
         -*)
             echo -e "${RED}エラー: 不明なオプション '$1'${RESET}" >&2
-            echo "使い方: $0 [-S host] [-W] [-e] [-i|-y] <リストファイル>" >&2
+            echo "使い方: $0 [-S host] [-W] [-O ssh_opt] [-e] [-nc] <リストファイル>" >&2
             exit 1 ;;
         *)
             if [[ -z "$LIST_FILE" ]]; then
@@ -232,13 +234,25 @@ rsync_cmd() {
     fi
 }
 
+# 移行元パスの存在確認。
+# リモートの場合は SSH の終了コードをそのまま返す:
+#   0   = 存在する
+#   255 = SSH接続失敗 (ファイアウォール/暗号不一致/到達不能など)
+#   その他 = パスが存在しない
+# SSH stderr は SRC_CHECK_STDERR に保存する (接続エラーヒント判定用)。
 src_exists() {
     local path="$1"
+    SRC_CHECK_STDERR=""
     if [[ -z "$SRC_HOST" ]]; then
         test -e "$path" 2>/dev/null
-    else
-        ssh_cmd "$SRC_HOST" test -e "$path" < /dev/null 2>/dev/null
+        return
     fi
+    local rc=0 tmp
+    tmp="$(mktemp)"
+    ssh_cmd "$SRC_HOST" test -e "$path" < /dev/null 2>"$tmp" || rc=$?
+    SRC_CHECK_STDERR="$(cat "$tmp")"
+    rm -f "$tmp"
+    return "$rc"
 }
 
 make_dst_dir() {
@@ -337,19 +351,42 @@ annotate_rsync_line() {
     fi
 }
 
+# rsync 終了コードと stderr に応じた接続エラーのヒントを返す
+rsync_error_hint() {
+    local rc="$1" stderr="$2"
+    case "$rc" in
+        255)
+            if echo "$stderr" | grep -qiE 'no matching (host key|key exchange)|Unable to negotiate|HostKeyAlgorithms|PubkeyAccepted|ssh-rsa'; then
+                echo "暗号アルゴリズム不一致。-O \"HostKeyAlgorithms=+ssh-rsa\" を追加してください (例: -S server1 -O \"HostKeyAlgorithms=+ssh-rsa\")"
+            else
+                echo "SSH接続エラー。ファイアウォールがSSHポートをブロックしているか、移行元サーバに到達できません"
+            fi ;;
+        10)  echo "ネットワークI/Oエラー。接続が拒否されたかネットワークに到達できません" ;;
+        30)  echo "転送タイムアウト。ファイアウォールが通信を遮断している可能性があります" ;;
+        35)  echo "接続タイムアウト。rsyncデーモンへの接続がタイムアウトしました" ;;
+        *)   echo "" ;;
+    esac
+}
+
 do_rsync() {
     local src_path="$1" dst_path="$2"
     local src="${src_path%/}/"  # 末尾 / でディレクトリの中身を同期
+    local stderr_tmp
+    stderr_tmp="$(mktemp)"
 
-    if [[ -z "$SRC_HOST" ]]; then
-        rsync_cmd "${RSYNC_OPTS[@]}" "$src" "$dst_path" < /dev/null
-    else
-        rsync_cmd "${RSYNC_OPTS[@]}" "${SRC_HOST}:${src}" "$dst_path" < /dev/null
-    fi | while IFS= read -r line; do
+    {
+        if [[ -z "$SRC_HOST" ]]; then
+            rsync_cmd "${RSYNC_OPTS[@]}" "$src" "$dst_path" < /dev/null
+        else
+            rsync_cmd "${RSYNC_OPTS[@]}" "${SRC_HOST}:${src}" "$dst_path" < /dev/null
+        fi
+    } 2>"$stderr_tmp" | while IFS= read -r line; do
         annotate_rsync_line "$line"
         echo "    $line" >> "$LOG_FILE"
     done
     local rc="${PIPESTATUS[0]}"
+    RSYNC_LAST_STDERR="$(cat "$stderr_tmp")"
+    rm -f "$stderr_tmp"
     return "$rc"
 }
 
@@ -438,9 +475,19 @@ run_loop() {
         log "  移行元: ${SRC_HOST:-ローカル}:${src}"
         log "  移行先: ローカル:${dst}"
 
-        if ! src_exists "$src"; then
-            echo -e "${RED}  エラー: 移行元が存在しません${RESET}" >&2
-            log "  結果: エラー (移行元が存在しません)"
+        local src_rc=0
+        src_exists "$src" || src_rc=$?
+        if [[ $src_rc -ne 0 ]]; then
+            if [[ -n "$SRC_HOST" && $src_rc -eq 255 ]]; then
+                local hint; hint="$(rsync_error_hint 255 "$SRC_CHECK_STDERR")"
+                echo -e "${RED}  エラー: 移行元サーバに接続できません (${SRC_HOST})${RESET}" >&2
+                [[ -n "$SRC_CHECK_STDERR" ]] && echo "$SRC_CHECK_STDERR" | while IFS= read -r eline; do echo "  $eline" >&2; log "    [stderr] $eline"; done
+                [[ -n "$hint" ]] && echo -e "  ${YELLOW}ヒント: ${hint}${RESET}" >&2
+                log "  結果: エラー (SSH接続失敗 code=255)"
+            else
+                echo -e "${RED}  エラー: 移行元が存在しません${RESET}" >&2
+                log "  結果: エラー (移行元が存在しません)"
+            fi
             failed=$((failed + 1)); continue
         fi
 
@@ -458,7 +505,10 @@ run_loop() {
             log "  結果: 完了 ($(date '+%Y-%m-%d %H:%M:%S'))"
             success=$((success + 1))
         else
+            local hint; hint="$(rsync_error_hint "$rc" "$RSYNC_LAST_STDERR")"
             echo -e "  ${RED}失敗 (rsync 終了コード: ${rc})${RESET}" >&2
+            [[ -n "$RSYNC_LAST_STDERR" ]] && echo "$RSYNC_LAST_STDERR" | while IFS= read -r eline; do echo "  $eline" >&2; log "    [stderr] $eline"; done
+            [[ -n "$hint" ]] && echo -e "  ${YELLOW}ヒント: ${hint}${RESET}" >&2
             log "  結果: 失敗 (code=${rc}, $(date '+%Y-%m-%d %H:%M:%S'))"
             failed=$((failed + 1))
         fi
